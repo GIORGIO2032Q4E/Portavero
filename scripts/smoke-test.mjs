@@ -1,0 +1,215 @@
+import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import { Console } from "node:console";
+import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
+import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
+import { URL } from "node:url";
+
+const output = new Console(process.stdout, process.stderr);
+const port = Number(process.env.PORT || 4173);
+const origin = `http://127.0.0.1:${port}`;
+const server = spawn(
+  process.execPath,
+  ["node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)],
+  { stdio: "inherit", env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } }
+);
+
+const pages = [
+  "/", "/about", "/how-it-works", "/vehicle-import",
+  "/vehicles", "/vin-check", "/shipping", "/account",
+  "/privacy-policy", "/terms"
+];
+
+const redirects = ["/calculator", "/compare"];
+
+function request(path, options = {}) {
+  return new Promise((resolve, reject) => {
+    const body = options.body;
+    const req = httpRequest(new URL(path, origin), {
+      method: options.method || "GET",
+      headers: {
+        ...(options.headers || {}),
+        ...(body ? { "Content-Length": Buffer.byteLength(body) } : {})
+      }
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve({
+        status: response.statusCode,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString("utf8")
+      }));
+    });
+    req.setTimeout(8000, () => req.destroy(new Error(`Request timed out: ${path}`)));
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function waitForServer() {
+  let lastError;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (server.exitCode !== null) {
+      throw new Error(`Production server exited early with code ${server.exitCode}.`);
+    }
+    try {
+      const response = await request("/");
+      if (response.status === 200) return;
+      lastError = new Error(`Server returned HTTP ${response.status} while starting.`);
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(400);
+  }
+  throw new Error(`Production server did not become ready: ${lastError instanceof Error ? lastError.message : "unknown error"}`);
+}
+
+try {
+  await waitForServer();
+
+  for (const path of pages) {
+    const response = await request(path);
+    assert.equal(response.status, 200, `${path} should return HTTP 200`);
+    assert.match(
+      String(response.headers["content-type"] || ""),
+      /text\/html/i,
+      `${path} should return HTML`
+    );
+    assert.match(response.body, /<main[^>]+id="main-content"/i, `${path} should render the main landmark`);
+    assert.match(response.body, /Portavero/i, `${path} should include the site identity`);
+    output.log(`PASS ${path}`);
+  }
+
+  const converterResponse = await request("/currency-converter");
+  assert.equal(converterResponse.status, 404, "/currency-converter should remain removed");
+  output.log("PASS /currency-converter is removed");
+
+  const exchangeRateResponse = await request("/api/exchange-rate");
+  assert.ok([200, 502, 503].includes(exchangeRateResponse.status), "/api/exchange-rate should return a rate or a clear upstream error");
+  const exchangeRatePayload = JSON.parse(exchangeRateResponse.body);
+  if (exchangeRateResponse.status === 200) {
+    assert.ok(Number.isFinite(exchangeRatePayload.usdToGel) && exchangeRatePayload.usdToGel > 0, "exchange-rate response should include a positive USD/GEL rate");
+    assert.equal(exchangeRatePayload.source, "National Bank of Georgia");
+  } else {
+    assert.equal(typeof exchangeRatePayload.error, "string", "upstream failure should explain that the rate is unavailable");
+  }
+  output.log("PASS /api/exchange-rate responds with a rate or a clear upstream error");
+
+  for (const path of redirects) {
+    const response = await request(path);
+    assert.equal(response.status, 307, `${path} should redirect to the car-import planner`);
+    assert.equal(response.headers.location, "/vehicle-import", `${path} should point to /vehicle-import`);
+    output.log(`PASS ${path} redirects to /vehicle-import`);
+  }
+
+  for (const [path, expectedType] of [["/robots.txt", /text\/plain/i], ["/sitemap.xml", /xml/i]]) {
+    const response = await request(path);
+    assert.equal(response.status, 200, `${path} should return HTTP 200`);
+    assert.match(String(response.headers["content-type"] || ""), expectedType, `${path} should use the expected content type`);
+    output.log(`PASS ${path}`);
+  }
+
+  const response = await request("/");
+  const expectedHeaders = {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "strict-transport-security": "max-age=31536000; includeSubDomains"
+  };
+  for (const [name, expected] of Object.entries(expectedHeaders)) {
+    assert.equal(response.headers[name], expected, `Expected ${name} security header`);
+  }
+  assert.equal(response.headers["x-powered-by"], undefined, "Next.js powered-by header should be disabled");
+  output.log("PASS baseline HTTP security headers");
+
+  const accountSession = await request("/api/account/session");
+  assert.ok([200, 503].includes(accountSession.status), "Account session endpoint should respond safely when unauthenticated or not configured");
+  if (accountSession.status === 200) {
+    assert.deepEqual(JSON.parse(accountSession.body), { session: null }, "Unauthenticated account session should not reveal or create a session");
+    assert.equal(String(accountSession.headers["set-cookie"] || ""), "", "Unauthenticated session check should not set credentials");
+  }
+  output.log("PASS account session endpoint does not expose browser-stored tokens");
+  if (accountSession.status === 200) {
+    const validEmailWithShortPassword = await request("/api/account/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: origin },
+      body: JSON.stringify({
+        action: "signin",
+        email: "qa-validation@example.test",
+        password: "short"
+      })
+    });
+    assert.equal(validEmailWithShortPassword.status, 400, "Valid email format should reach password validation before any provider request");
+    assert.equal(
+      JSON.parse(validEmailWithShortPassword.body).error,
+      "Use a password between 8 and 128 characters.",
+      "Valid email must not be rejected by the account email validator"
+    );
+    output.log("PASS account session accepts a valid email format before checking password length");
+  } else {
+    output.log("SKIP account email endpoint check because Supabase is not configured in this environment");
+  }
+
+  const accountEstimates = await request("/api/account/estimates");
+  assert.ok([401, 503].includes(accountEstimates.status), "Saved estimates must require an authenticated user or report that accounts are not configured");
+  output.log("PASS saved estimates require an authenticated session");
+
+  const invalidReset = await request("/api/account/password-reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: origin },
+    body: JSON.stringify({ email: "not-an-email" })
+  });
+  assert.equal(invalidReset.status, 400, "Malformed password-reset email should be rejected locally");
+  output.log("PASS password reset rejects invalid email without calling provider");
+
+  const crossSiteReset = await request("/api/account/password-reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://attacker.example" },
+    body: JSON.stringify({ email: "test@example.com" })
+  });
+  assert.equal(crossSiteReset.status, 403, "Cross-site password-reset requests should be rejected");
+  output.log("PASS cross-site password-reset requests are rejected");
+
+  const crossSiteSession = await request("/api/account/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: "https://attacker.example" },
+    body: JSON.stringify({ action: "signout" })
+  });
+  assert.equal(crossSiteSession.status, 403, "Cross-site account session changes should be rejected");
+  output.log("PASS cross-site session changes are rejected");
+
+  const invalidVin = await request("/api/vin-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vin: "short" })
+  });
+  assert.equal(invalidVin.status, 400, "Invalid VIN should be rejected before contacting the upstream decoder");
+  const invalidVinBody = JSON.parse(invalidVin.body);
+  assert.equal(typeof invalidVinBody.error, "string", "Invalid VIN response should contain a readable error");
+  output.log("PASS VIN API rejects invalid input locally");
+
+  const invalidAuctionVin = await request("/api/auction-history", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vin: "short" })
+  });
+  assert.equal(invalidAuctionVin.status, 400, "Invalid auction VIN should be rejected before using provider quota");
+  const invalidAuctionVinBody = JSON.parse(invalidAuctionVin.body);
+  assert.equal(typeof invalidAuctionVinBody.error, "string", "Invalid auction VIN response should contain a readable error");
+  output.log("PASS auction history API rejects invalid VINs locally");
+
+  output.log(`Production smoke tests passed for ${pages.length} pages, ${redirects.length} redirects, 2 metadata routes, security headers, VIN decoding validation and auction-history input validation.`);
+} finally {
+  if (server.exitCode === null) {
+    server.kill("SIGTERM");
+    await Promise.race([
+      new Promise((resolve) => server.once("exit", resolve)),
+      delay(2500)
+    ]);
+    if (server.exitCode === null) server.kill("SIGKILL");
+  }
+}

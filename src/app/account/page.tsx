@@ -1,0 +1,230 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import {
+  washaleShenakhuliShefaseba,
+  migheSesia,
+  authKonfigurirebulia,
+  migheShenakhuliShefasebebi,
+  parolisAghdgenisGagzavna,
+  aghadgenisSesiisDawyeba,
+  parolisGanaxleba,
+  sesiashiShesvla,
+  sesiidanGasvla,
+  registracia,
+  type ShenakhuliShefaseba,
+  type PortaveroSesia
+} from "@/lib/auth";
+
+export default function AccountPage() {
+  const [session, setSession] = useState<PortaveroSesia | null>(null);
+  const [checkingAccount, setCheckingAccount] = useState(true);
+  const [estimates, setEstimates] = useState<ShenakhuliShefaseba[]>([]);
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [recoverySession, setRecoverySession] = useState<PortaveroSesia | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const configured = authKonfigurirebulia();
+
+  const ganaxleAngarishi = useCallback(async () => {
+    try {
+      const current = await migheSesia();
+      setSession(current);
+      if (current) {
+        try {
+          setEstimates(await migheShenakhuliShefasebebi());
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Could not load saved estimates.");
+        }
+      } else {
+        setEstimates([]);
+      }
+    } catch (e) {
+      setSession(null);
+      setEstimates([]);
+      setError(e instanceof Error ? e.message : "Could not check your account.");
+    } finally {
+      setCheckingAccount(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    async function initialise() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("mode") === "signup") setMode("signup");
+      else if (params.get("mode") === "signin") setMode("signin");
+
+      let recovery: PortaveroSesia | null = null;
+      try {
+        recovery = await aghadgenisSesiisDawyeba();
+      } catch (recoveryError) {
+        setRecoveryMode(false);
+        setRecoverySession(null);
+        setError(recoveryError instanceof Error
+          ? recoveryError.message
+          : "The recovery link is invalid or expired. Request a new password reset link.");
+      }
+
+      if (recovery) {
+        setRecoverySession(recovery);
+        setRecoveryMode(true);
+        setMessage("Choose a new password for your account.");
+      } else if (params.get("reset") === "1" && !window.location.hash) {
+        setMessage("If you requested a password reset, check your inbox for the recovery link.");
+      }
+      await ganaxleAngarishi();
+    }
+    void initialise();
+  }, [ganaxleAngarishi]);
+
+  async function daamushaveForm(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      if (recoveryMode && recoverySession) {
+        await parolisGanaxleba(newPassword);
+        setRecoveryMode(false);
+        setRecoverySession(null);
+        setNewPassword("");
+        await sesiidanGasvla();
+        setSession(null);
+        setMessage("Password updated. Sign in with your new password.");
+      } else if (resetMode) {
+        await parolisAghdgenisGagzavna(email.trim());
+        setMessage(`If an account exists for ${email.trim()}, a reset link has been sent. Check your inbox and spam folder.`);
+      } else if (mode === "signup") {
+        const result = await registracia(email.trim(), password);
+        if (result.session) {
+          setMessage("Your account is ready.");
+          setPassword("");
+          await ganaxleAngarishi();
+        } else {
+          setMessage("Account created. Check your inbox to confirm your email, then sign in.");
+          setPassword("");
+        }
+      } else {
+        await sesiashiShesvla(email.trim(), password);
+        setMessage("You are signed in.");
+        setPassword("");
+        await ganaxleAngarishi();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function gaasruleSesiaUI() {
+    setBusy(true);
+    setError("");
+    try {
+      await sesiidanGasvla();
+      setSession(null);
+      setEstimates([]);
+      setMessage("You have signed out.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not sign out.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function washaleShefaseba(id: string) {
+    setError("");
+    try {
+      await washaleShenakhuliShefaseba(id);
+      setEstimates((current) => current.filter((item) => item.id !== id));
+      setMessage("Saved estimate deleted.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not delete the estimate.");
+    }
+  }
+
+  return (
+    <>
+      <section className="page-hero">
+        <div className="container">
+          <span className="eyebrow">Account</span>
+          <h1>{session ? "Your account." : "Sign in or create an account."}</h1>
+          <p>Sign in to access estimates saved to your account in an earlier version of Portavero. New vehicle-import drafts stay in this browser and are not uploaded to your account.</p>
+        </div>
+      </section>
+      <section className="section">
+        <div className="container account-layout">
+          {!configured ? (
+            <section className="panel account-panel">
+              <h2>Account access is not configured.</h2>
+              <p>Account sign-in uses Supabase. To turn it on, the project URL and publishable key need to be added to the site settings.</p>
+              <ol>
+                <li>Create a project at <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">Supabase</a>.</li>
+                <li>Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY to your local environment and Vercel project.</li>
+                <li>Run the SQL in <code>supabase/schema.sql</code> in the Supabase SQL Editor.</li>
+                <li>In Supabase Authentication settings, set the site URL and allow your Portavero preview/production URLs.</li>
+              </ol>
+              <div className="notice">Do not put a Supabase service-role key in browser code or commit secrets to GitHub.</div>
+              <Link href="/" className="button button-dark">Go to home</Link>
+            </section>
+          ) : checkingAccount ? (
+            <section className="panel account-panel account-loading-panel" role="status" aria-live="polite">
+              <span className="eyebrow">Account access</span>
+              <h2>Checking your session</h2>
+              <p>Loading your account details securely.</p>
+              <div className="account-loading-indicator" aria-hidden="true"><span /></div>
+            </section>
+          ) : session ? (
+            <section className="panel account-panel">
+              <div className="account-heading">
+                <div><span className="eyebrow">Signed in</span><h2>{session.user.email ?? "Signed-in account"}</h2></div>
+                <button type="button" className="button button-outline" disabled={busy} onClick={gaasruleSesiaUI}>Sign out</button>
+              </div>
+              <p>These estimates were saved in an earlier version of Portavero. They can be reviewed and deleted here, but cannot be loaded into the current planner.</p>
+              {error && <p className="account-error" role="alert">{error}</p>}
+              <h3>Saved estimates ({estimates.length})</h3>
+              {estimates.length === 0 ? <p className="empty-state">There are no estimates saved to this account yet.</p> : (
+                <div className="account-estimate-list">
+                  {estimates.map((item) => (
+                    <div className="account-estimate" key={item.id}>
+                      <div><strong>{item.name}</strong><small>Updated {new Date(item.updated_at).toLocaleDateString()}</small></div>
+                      <div className="account-estimate-actions">
+                        <button type="button" className="button button-outline button-small" onClick={() => void washaleShefaseba(item.id)}>Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Link href="/vehicle-import" className="button button-dark">Open vehicle import planner</Link>
+            </section>
+          ) : (
+            <section className="panel account-panel">
+              <div className="account-heading"><div><span className="eyebrow">Account access</span><h2>{recoveryMode ? "Choose a new password" : resetMode ? "Reset your password" : mode === "signup" ? "Create your account" : "Welcome back"}</h2></div></div>
+              <p>{recoveryMode ? "Set a new password to finish recovering your account." : resetMode ? "Enter your email address. If an account exists, we will send a password reset link. Portavero does not reveal whether an account exists." : mode === "signup" ? "Create a Portavero account. The current vehicle-import planner saves drafts on this device, not to your account." : "Sign in to access any estimates saved to your account in an earlier version of Portavero."}</p>
+              <form className="account-form" onSubmit={daamushaveForm}>
+                {!recoveryMode && <div className="field"><label htmlFor="account-email">Email address</label><input id="account-email" type="email" autoComplete="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></div>}
+                {recoveryMode ? <div className="field"><label htmlFor="new-account-password">New password</label><input id="new-account-password" type="password" autoComplete="new-password" minLength={8} required value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /><small>Use at least 8 characters.</small></div> : !resetMode && <div className="field"><label htmlFor="account-password">Password</label><input id="account-password" type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} /><small>Use at least 8 characters. Portavero never stores your password in its own database.</small></div>}
+                {error && <p className="account-error" role="alert">{error}</p>}
+                {message && <p className="account-message" role="status">{message}</p>}
+                <button type="submit" className="button button-dark" disabled={busy}>{busy ? "Please wait…" : recoveryMode ? "Update password" : resetMode ? "Send reset link" : mode === "signup" ? "Create account" : "Sign in"}</button>
+              </form>
+              <div className="account-switches">
+                {!resetMode && !recoveryMode && <button type="button" className="text-button" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMessage(""); setError(""); }}>{mode === "signin" ? "New to Portavero? Create an account" : "Already have an account? Sign in"}</button>}
+                {!recoveryMode && <button type="button" className="text-button" onClick={() => { setResetMode(!resetMode); setMessage(""); setError(""); }}>{resetMode ? "Back to sign in" : "Forgot your password?"}</button>}
+                {recoveryMode && <button type="button" className="text-button" onClick={() => { setRecoveryMode(false); setRecoverySession(null); setResetMode(false); setMessage(""); }}>Back to sign in</button>}
+              </div>
+              <p className="account-privacy">By creating an account, you agree to the <Link href="/terms">Terms</Link> and acknowledge the <Link href="/privacy-policy">Privacy Policy.</Link></p>
+            </section>
+          )}
+        </div>
+      </section>
+    </>
+  );
+}

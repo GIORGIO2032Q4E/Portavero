@@ -1,0 +1,34 @@
+{
+  "name": "portavero",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/lib/rate-limit.test.mjs src/lib/account-validation.test.mjs src/lib/vehicle-tax.test.mjs src/lib/vin.test.mjs src/lib/number-input.test.mjs src/lib/vehicle-import-costs.test.mjs src/lib/vehicle-selection.test.mjs src/lib/vehicle-import-inputs.test.mjs src/lib/cost-estimator.test.mjs src/lib/nbg-exchange-rate.test.mjs src/lib/auction-history.test.mjs",
+    "test:smoke": "node scripts/smoke-test.mjs"
+  },
+  "dependencies": {
+    "next": "^16.4.6",
+    "react": "^19.2.9",
+    "react-dom": "^19.2.9",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "eslint": "^10.0.0",
+    "typescript": "^5.8.3",
+    "@eslint/js": "^10.0.0",
+    "typescript-eslint": "^8.71.2"
+  },
+  "overrides": {
+    "postcss": "^8.5.23",
+    "sharp": "^0.35.5",
+    "minimatch": "^11.0.4"
+  }
+}
