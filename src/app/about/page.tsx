@@ -26,7 +26,11 @@ export default function AboutPage() {
           <h2>What it does not check</h2>
           <p>The vehicle lookup returns technical details, not accident, title, ownership, odometer or service history. Auction records are searched separately through a third-party index. That index may not contain every listing, and no result does not mean a car has never been listed or is damage-free. VIN and chassis results can also be incomplete or ambiguous.</p>
           <p>The vehicle-tax estimate covers selected passenger-car cases, not every classification or exception. The GEL 480 standard-fee amount is a stored snapshot, not a live lookup. Shipping prices and other costs must come from quotes or documents you have checked. Before buying or shipping a car, verify its details and tax treatment with the Georgian Revenue Service.</p>
-          <p>The source code, automated tests and manual QA checklist are in the <a href="https://github.com/GIORGIO2032Q4E/portavero" target="_blank" rel="noreferrer">Portavero repository</a>.</p>
+          <p>The source code and automated tests are available in the <a href="https://github.com/GIORGIO2032Q4E/Portavero" target="_blank" rel="noreferrer">Portavero repository</a>.</p>
+
+          <h2>Project creator</h2>
+          <p>George Pavliashvili</p>
+          <p>Contact: <a href="mailto:giopavliashvili09@gmail.com">giopavliashvili09@gmail.com</a></p>
         </div>
       </section>
     </>
